@@ -1,0 +1,140 @@
+#!/bin/bash
+
+RUN_UPDATE=true
+
+has() {
+  type "$1" > /dev/null 2>&1
+}
+
+prepare_install() {
+    if $RUN_UPDATE
+    then
+    echo "apt-get updating..."
+    sudo apt-get -qq update -y
+    RUN_UPDATE=false
+    fi
+}
+
+install_package() {
+    REQUIRED_PKG=$1
+    PKG_OK=$(dpkg-query -W --showformat='${Status}\n' $REQUIRED_PKG|grep "install ok installed")
+    if [ "$PKG_OK" = "" ]
+    then
+        prepare_install
+        sudo apt-get -qq install $1 -y
+    fi
+}
+
+install_nvm() {
+    VERSION=0.40.1
+
+    if [ ! -s "$NVM_DIR/nvm.sh" ]
+    then
+        curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v$VERSION/install.sh | bash
+    fi
+    
+}
+
+install_docker() {
+    if ! has "docker-ce" || ! has "docker-ce-cli" || ! has "containerd.io" || ! has "docker-buildx-plugin" || ! has "docker-compose-plugin"
+    then
+        # Add Docker's official GPG key:
+        sudo apt-get -qq update -y
+        sudo apt-get -qq install ca-certificates curl -y
+        sudo install -m 0755 -d /etc/apt/keyrings
+        sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+        sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+        # Add the repository to Apt sources:
+        echo \
+        "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+        $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+        sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+        sudo apt-get -qq update -y
+
+        sudo apt-get -qq install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin -y
+
+        if ! getent group docker
+        then
+            sudo groupadd docker
+        fi
+        sudo usermod -aG docker $USER
+        newgrp docker
+    fi
+}
+
+create_host() {
+    HOST=$1
+    HOSTNAME=$2
+    USERNAME=$3
+
+    if [ ! -e ~/.ssh/config ] || [ ! -s ~/.ssh/config ]
+    then
+        echo -e "Host $HOST\n\tHostName $HOSTNAME\n\tUser $USERNAME" >> ~/.ssh/config
+    elif ! grep -wq "$HOST" ~/.ssh/config
+    then 
+        echo -e "\nHost $HOST\n\tHostName $HOSTNAME\n\tUser $USERNAME" >> ~/.ssh/config
+    fi
+}
+
+create_hosts () {
+    create_host autoproc-build-1 10.42.45.68 cd-autoproc
+    create_host autoproc-build-2 10.42.45.69 cd-autoproc
+    create_host autoproc-build-3 10.42.45.70 cd-autoproc
+
+    create_host autoproc-tst-1 autoproc-tst-1.westeurope.cloudapp.azure.com autoproc_ops
+    create_host contaja-tst-1-k8s-1 contaja-tst-1-kubernetes-3.westeurope.cloudapp.azure.com autoproc_ops
+    create_host contaja-tst-1-k8s-2 contaja-tst-1-kubernetes-4.westeurope.cloudapp.azure.com autoproc_ops
+
+    create_host autoproc-tst-2 autoproc-tst-2.westeurope.cloudapp.azure.com autoproc_ops
+    create_host contaja-tst-2-k8s-1 contaja-tst-2-kubernetes-1.westeurope.cloudapp.azure.com autoproc_ops
+    create_host contaja-tst-2-k8s-2 contaja-tst-2-kubernetes-2.westeurope.cloudapp.azure.com autoproc_ops
+
+    create_host autoproc-tst-3 autoproc-tst-3.westeurope.cloudapp.azure.com autoproc_ops
+    create_host contaja-tst-3-k8s-1 contaja-tst-3-kubernetes-1.westeurope.cloudapp.azure.com autoproc_ops
+    create_host contaja-tst-3-k8s-2 contaja-tst-3-kubernetes-2.westeurope.cloudapp.azure.com autoproc_ops
+}
+
+create_ssh_host() {
+    HOST=$1
+    PASS=$2
+
+    printf "if [[ \"\$1\" == \"$HOST\" ]] then\n" >> ~/.bashrc
+    echo -ne "    command sshpass -p \'$PASS\' ssh -o StrictHostKeyChecking=no $HOST\n" >> ~/.bashrc
+    printf "  el" >> ~/.bashrc
+}
+
+create_ssh() {
+    if ! grep -wq "function ssh() {" ~/.bashrc
+    then
+        echo -ne "\nfunction ssh() {\n  " >> ~/.bashrc
+        create_ssh_host autoproc-build-1 Critical2024!
+        create_ssh_host autoproc-build-2 Critical2024!
+        create_ssh_host autoproc-build-3 Critical2024!
+
+        create_ssh_host autoproc-tst-1 Critical2023!
+        create_ssh_host autoproc-tst-1-k8s-1 Critical2023!
+        create_ssh_host autoproc-tst-1-k8s-2 Critical2023!
+
+        create_ssh_host autoproc-tst-2 Critical2023!
+        create_ssh_host autoproc-tst-2-k8s-1 Critical2023!
+        create_ssh_host autoproc-tst-2-k8s-2 Critical2023!
+
+        create_ssh_host autoproc-tst-3 Critical2023!
+        create_ssh_host autoproc-tst-3-k8s-1 Critical2023!
+        create_ssh_host autoproc-tst-3-k8s-2 Critical2023!
+        echo -ne "se\n    command ssh \"\$@\"\n  fi\n}\n" >> ~/.bashrc
+    fi
+}
+
+
+if [[ $1 = "0000000000000000000000000000000000000000" ]]
+then
+    install_package build-essential
+    install_package sshpass
+    install_nvm
+    install_docker
+
+    create_hosts
+    create_ssh
+fi
